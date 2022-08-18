@@ -34,7 +34,7 @@ public class MdbConnection {
             String currentStatus = this.getTerminalStatus();
             if (currentStatus.equals("D,ERR,\"cashless master is on\"")) {
                 // Restart Master Device
-            } else if (currentStatus)
+            }
 
             serialPort.writeBytes(writeBuffer2, writeBuffer1.length);
             serialPort.writeBytes(writeBuffer3, writeBuffer1.length);
