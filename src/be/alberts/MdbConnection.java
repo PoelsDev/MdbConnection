@@ -8,17 +8,19 @@ package be.alberts;
 
 import com.fazecast.jSerialComm.SerialPort;
 
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeUnit;
+
 public class MdbConnection {
 
     private SerialPort serialPort;
 
     public MdbConnection(int comPort, int baudRate) {
-        int maxComPort = Math.max(comPort, 1);
         int maxBaudRate = Math.max(baudRate, 115200);
 
         // Initialize serial connection
         SerialPort[] comPorts = SerialPort.getCommPorts();
-        serialPort = comPorts[maxComPort];
+        serialPort = comPorts[comPort];
         serialPort.setBaudRate(maxBaudRate);
     }
 
@@ -35,56 +37,62 @@ public class MdbConnection {
             serialPort.openPort();
 
             // Configure interface mode, start polling and request a vend
-            String disableCashlessMaster = "D,0";
-            String alwaysIdle = "D,2";
-            String pollReader = "D,READER,1";
-            String requestVend = "D,REQ," + amount + "," + id;
+            String disableCashlessMaster = "D,0\n";
+            String alwaysIdle = "D,2\n";
+            String pollReader = "D,READER,1\n";
+            String requestVend = "D,REQ," + amount + "," + id + "\n";
+            String endVend = "D,END," + id + "\n";
 
-            byte[] writeBuffer0= disableCashlessMaster.getBytes();
-            byte[] writeBuffer1= alwaysIdle.getBytes();
-            byte[] writeBuffer2= pollReader.getBytes();
-            byte[] writeBuffer3= requestVend.getBytes();
+            byte[] disableCashlessMasterBuffer = disableCashlessMaster.getBytes();
+            byte[] alwaysIdleBuffer = alwaysIdle.getBytes();
+            byte[] pollReaderBuffer = pollReader.getBytes();
+            byte[] requestVendBuffer = requestVend.getBytes();
+            byte[] endVendBuffer = endVend.getBytes();
 
             // Enable cashless master mode on interface
-            serialPort.writeBytes(writeBuffer1, writeBuffer1.length);
-            String currentStatus = this.getTerminalStatus();
-            if (currentStatus.contains("D,ERR,\"cashless master is on\"")) {
-                serialPort.writeBytes(writeBuffer0, writeBuffer0.length);
-                serialPort.writeBytes(writeBuffer1, writeBuffer1.length);
-            }
+            serialPort.writeBytes(disableCashlessMasterBuffer, disableCashlessMasterBuffer.length);
+            serialPort.writeBytes(alwaysIdleBuffer, alwaysIdleBuffer.length);
 
             // Enable polling to reader (slave device)
-            currentStatus = this.getTerminalStatus();
-            if (currentStatus.contains("d,STATUS,INIT,1")) {
-                serialPort.writeBytes(writeBuffer2, writeBuffer1.length);
-            } else {
-                return false;
+            String currentStatus = this.getTerminalStatus();
+            while(true){
+                if (currentStatus.contains("d,STATUS,INIT,0")) {
+                    serialPort.writeBytes(pollReaderBuffer, pollReaderBuffer.length);
+                    break;
+                } else {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                    currentStatus = this.getTerminalStatus();
+                }
             }
 
             // Check if reader (slave device) is ready
-            currentStatus = this.getTerminalStatus();
-            if(currentStatus.contains("d,STATUS,IDLE")){
-                // Request vend
-                serialPort.writeBytes(writeBuffer3, writeBuffer1.length);
-            } else {
-                return false;
+            while(true){
+                if(currentStatus.contains("d,STATUS,CREDIT")){
+                    // Request vend
+                    serialPort.writeBytes(requestVendBuffer, requestVendBuffer.length);
+                    break;
+                } else {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                    currentStatus = this.getTerminalStatus();
+                }
             }
 
             // Check vend result
-            currentStatus = this.getTerminalStatus();
-            if (!currentStatus.contains(String.format("d,STATUS,RESULT,1,%.2f",amount))){
-                return false;
+            while(true){
+                if(currentStatus.contains("d,STATUS,RESULT,1")){
+                    // End vend and close serial port
+                    serialPort.writeBytes(endVendBuffer, endVendBuffer.length);
+                    serialPort.closePort();
+                    return true;
+
+                } else if (currentStatus.contains("d,STATUS,RESULT,-1")){
+                    return false;
+
+                } else {
+                    TimeUnit.MILLISECONDS.sleep(100);
+                    currentStatus = this.getTerminalStatus();
+                }
             }
-
-            // Check product dispense result
-            if (currentStatus.contains("d,END,-1")){
-                return false;
-            }
-
-            serialPort.closePort();
-
-            // Check if reader (slave device) is ready again
-            return currentStatus.contains("d,STATUS,IDLE");
 
         } catch (Exception e){
             e.printStackTrace();
@@ -103,11 +111,13 @@ public class MdbConnection {
         StringBuilder status = new StringBuilder();
         while (serialPort.bytesAvailable() > 0) {
             byte[] readBuffer = new byte[serialPort.bytesAvailable()];
+            serialPort.readBytes(readBuffer, readBuffer.length);
             for (byte b : readBuffer) {
                 status.append((char) b);
             }
         }
 
+        if(!status.toString().isEmpty()) System.out.println(status.toString());
         return status.toString();
     }
 }
