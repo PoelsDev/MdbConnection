@@ -7,13 +7,11 @@
 package be.alberts;
 
 import com.fazecast.jSerialComm.SerialPort;
-
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 public class MdbConnection {
 
-    private SerialPort serialPort;
+    private final SerialPort serialPort;
 
     public MdbConnection(int comPort, int baudRate) {
         int maxBaudRate = Math.max(baudRate, 115200);
@@ -50,25 +48,38 @@ public class MdbConnection {
             byte[] endVendBuffer = endVend.getBytes();
 
             // Enable cashless master mode on interface
+            System.out.println("Enabling Master mode...");
             serialPort.writeBytes(disableCashlessMasterBuffer, disableCashlessMasterBuffer.length);
             serialPort.writeBytes(alwaysIdleBuffer, alwaysIdleBuffer.length);
 
             // Enable polling to reader (slave device)
+            TimeUnit.MILLISECONDS.sleep(100);
             String currentStatus = this.getTerminalStatus();
+            System.out.println("Enabling polling...");
+            int pollCount = 0;
             while(true){
                 if (currentStatus.contains("d,STATUS,INIT,0")) {
                     serialPort.writeBytes(pollReaderBuffer, pollReaderBuffer.length);
+                    System.out.println("Polling enabled...");
                     break;
+                } else if(currentStatus.contains("d,STATUS,RESET") && pollCount > 9){
+                    // No slave device is connected - vend failed
+                    System.out.println("Slave device is not connected...");
+                    return false;
                 } else {
                     TimeUnit.MILLISECONDS.sleep(100);
                     currentStatus = this.getTerminalStatus();
+                    pollCount++;
                 }
             }
 
             // Check if reader (slave device) is ready
+            System.out.println("Checking if reader is ready for vending...");
+            TimeUnit.MILLISECONDS.sleep(100);
             while(true){
                 if(currentStatus.contains("d,STATUS,CREDIT")){
                     // Request vend
+                    System.out.println("Requesting vend...");
                     serialPort.writeBytes(requestVendBuffer, requestVendBuffer.length);
                     break;
                 } else {
@@ -78,10 +89,12 @@ public class MdbConnection {
             }
 
             // Check vend result
+            TimeUnit.MILLISECONDS.sleep(100);
             while(true){
                 if(currentStatus.contains("d,STATUS,RESULT,1")){
                     // End vend and close serial port
                     serialPort.writeBytes(endVendBuffer, endVendBuffer.length);
+                    System.out.println("Ending vend...");
                     serialPort.closePort();
                     return true;
 
@@ -117,7 +130,7 @@ public class MdbConnection {
             }
         }
 
-        if(!status.toString().isEmpty()) System.out.println(status.toString());
+        if(!status.toString().isEmpty()) System.out.println(status);
         return status.toString();
     }
 }
